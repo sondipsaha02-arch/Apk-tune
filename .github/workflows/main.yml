@@ -2,43 +2,92 @@ name: Build Tune APK
 
 on:
   workflow_dispatch:
+    inputs:
+      server_url:
+        description: "Your deployed Tune server URL"
+        required: true
+        type: string
 
 jobs:
   build-apk:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout project
+      - name: Checkout original Tune project
         uses: actions/checkout@v4
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 22
-        
 
-      - name: Install dependencies
-        run: npm install
+      - name: Install original dependencies
+        run: npm ci
+
+      - name: Build original Tune web app
+        run: npm run build
 
       - name: Install Capacitor
         run: npm install --no-save @capacitor/core @capacitor/cli @capacitor/android
 
-      - name: Build Tune
-        run: npm run build
+      - name: Create Capacitor configuration
         env:
-          VITE_TUNE_SERVER_URL: ${{ vars.TUNE_SERVER_URL }}
+          TUNE_SERVER_URL: ${{ inputs.server_url }}
+        run: |
+          cat > capacitor.config.ts <<EOF
+          import type { CapacitorConfig } from '@capacitor/cli';
 
-      - name: Create Android project
+          const config: CapacitorConfig = {
+            appId: 'com.sondipsaha.tune',
+            appName: 'Tune',
+            webDir: 'dist',
+            server: {
+              url: '${TUNE_SERVER_URL}',
+              cleartext: false
+            },
+            android: {
+              allowMixedContent: false
+            }
+          };
+
+          export default config;
+          EOF
+
+      - name: Add Android platform
         run: npx cap add android
 
-      - name: Sync Android project
+      - name: Sync Android
         run: npx cap sync android
 
-      - name: Build APK
+      - name: Add Android permissions
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          p = Path("android/app/src/main/AndroidManifest.xml")
+          text = p.read_text()
+
+          permissions = [
+              '<uses-permission android:name="android.permission.RECORD_AUDIO" />',
+              '<uses-permission android:name="android.permission.CAMERA" />',
+              '<uses-permission android:name="android.permission.INTERNET" />'
+          ]
+
+          for permission in permissions:
+              if permission not in text:
+                  text = text.replace(
+                      '<manifest xmlns:android="http://schemas.android.com/apk/res/android">',
+                      '<manifest xmlns:android="http://schemas.android.com/apk/res/android">\n    ' + permission
+                  )
+
+          p.write_text(text)
+          PY
+
+      - name: Build Debug APK
         working-directory: android
         run: ./gradlew assembleDebug --no-daemon
 
-      - name: Upload APK
+      - name: Upload Tune APK
         uses: actions/upload-artifact@v4
         with:
           name: Tune-APK
